@@ -260,6 +260,88 @@ Or just run **`rp`** with no arguments for the interactive menu (arrow keys, ent
 
 Running `rp new` with no arguments asks for each detail step by step.
 
+## Usage guide
+
+A real engagement, step by step.
+
+### 1. Pick an AI model (once)
+
+Local, so data stays on your machine (recommended):
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull qwen2.5:14b
+```
+
+Or use the Claude Code / Codex CLI you already have (data goes to the cloud, so enable it per project
+with `rp cloud on`):
+
+```bash
+rp ask -m claude-cli:default "summarize the attack surface"
+```
+
+`rp models` shows which backends are ready.
+
+### 2. Create a project per engagement
+
+```bash
+rp new acme --client "Acme Corp" --auth-ref "RoE-2026-07" \
+   --scope acme.com --scope 10.0.0.0/24 --exclude vpn.acme.com
+```
+
+It becomes the active project, so later commands don't need its name.
+
+### 3. Import your recon results
+
+Run your usual tools against authorized targets, save their JSON output, then:
+
+```bash
+rp import results/subs.json results/http.json
+```
+
+### 4. Explore
+
+```bash
+rp status                 # dashboard
+rp search admin           # find assets
+rp search -t ip           # only IPs
+rp search --out           # assets found outside your scope
+rp show N3                # one asset, its relationships and evidence
+```
+
+### 5. Let the AI analyst work
+
+```bash
+rp triage                                  # reviews everything, drafts findings, suggests next steps
+rp ask "which hosts run outdated software?"
+rp chat                                    # conversation, /exit to quit
+```
+
+Every claim cites evidence like `E7`. Check it with `rp show E7`.
+
+### 6. Review what it produced
+
+```bash
+rp findings               # draft findings
+rp accept F1 F3           # keep these
+rp reject F2              # drop this one
+rp steps                  # suggested next steps
+rp approve J1             # run it yourself, then rp import the output
+rp done J1
+```
+
+### 7. Write the report
+
+```bash
+rp report                 # writes acme-report.md with accepted findings
+```
+
+### Shortcuts
+
+- `rp` with no arguments opens the arrow-key menu.
+- `rp use other-project` switches the active project.
+- `rp log` shows everything that happened, including each AI tool call.
+
 ## Commands
 
 The active project is remembered, so you never type its name. Switch with `rp use <name>`,
