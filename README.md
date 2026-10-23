@@ -40,6 +40,192 @@ drafts findings and suggests next steps. Every claim it makes must cite a stored
   your approval.
 - **Audit trail.** Every import, AI tool call and decision is logged in an append-only table.
 
+## Architecture
+
+### Components
+
+```mermaid
+flowchart LR
+    user(["👤 You"])
+
+    subgraph ui["Terminal interface"]
+        cli["cli.py<br/>rp commands"]
+        menu["shell.py<br/>interactive menu"]
+        view["ui.py<br/>dashboard and tables"]
+    end
+
+    subgraph core["Core"]
+        imp["importers.py<br/>parse tool output"]
+        scope["scope.py<br/>scope engine"]
+        store["store.py<br/>evidence store and graph"]
+        report["report.py<br/>Markdown report"]
+    end
+
+    subgraph ai["AI layer"]
+        analyst["ai/analyst.py<br/>agent loop and citation check"]
+        gate{"Privacy gate<br/>allow_cloud?"}
+        prov["ai/providers.py"]
+    end
+
+    subgraph models["Model backends"]
+        local["Local<br/>Ollama · LM Studio · llama.cpp"]
+        cloud["Cloud APIs<br/>Anthropic · OpenAI · Gemini · OpenRouter"]
+        clis["CLIs<br/>codex · claude"]
+    end
+
+    db[("SQLite<br/>one file per project")]
+    files[/"Tool output files<br/>JSON lines / host lists"/]
+    md[/"report.md"/]
+
+    user --> cli & menu
+    menu --> cli
+    cli --> view
+    cli --> imp & store & analyst & report
+    files --> imp
+    imp --> scope
+    imp --> store
+    store <--> db
+    analyst -- "read-only tools" --> store
+    analyst --> scope
+    analyst --> prov
+    prov --> gate
+    gate -- "always" --> local
+    gate -- "only if allowed" --> cloud & clis
+    report --> md
+```
+
+### Data flow: from raw output to a report
+
+```mermaid
+flowchart TD
+    A[/"Tool output you collected<br/>on authorized targets"/] --> B["rp import"]
+    B --> C["Evidence records E1, E2...<br/>raw line + SHA-256 hash"]
+    C --> D["Entities N1, N2...<br/>domains, IPs, URLs, tech"]
+    D --> E{"In scope?"}
+    E -- yes --> F["Attack surface graph"]
+    E -- no --> G["Flagged 'outside'<br/>hidden from the AI's suggestions"]
+    F --> H["rp triage / rp ask / rp chat"]
+    H --> I["Draft findings F1...<br/>must cite evidence"]
+    H --> J["Suggested steps J1...<br/>in-scope targets only"]
+    I --> K{"You review"}
+    J --> L{"You review"}
+    K -- accept --> M["Accepted findings"]
+    K -- reject --> N["Rejected"]
+    L -- approve --> O["You run it yourself,<br/>then import the result"]
+    O --> B
+    M --> P["rp report → report.md"]
+
+    C -.-> Q[("Append-only audit log")]
+    H -.-> Q
+    K -.-> Q
+    L -.-> Q
+```
+
+### How a question to the AI analyst is answered
+
+```mermaid
+sequenceDiagram
+    actor You
+    participant CLI as rp ask / chat / triage
+    participant A as Analyst
+    participant M as Model (any provider)
+    participant S as Store
+
+    You->>CLI: question
+    CLI->>A: ask(question)
+    loop up to max_steps
+        A->>M: persona + tools + conversation
+        M-->>A: JSON tool call or final answer
+        alt tool call
+            A->>S: search / get_entity / get_evidence / stats
+            S-->>A: data wrapped as untrusted collected_data
+            A->>S: log the tool call to the audit log
+        else draft finding or suggested step
+            A->>S: check scope and evidence IDs, then save as draft / suggested
+        else final answer
+            A->>A: citation check (are all E-ids real?)
+            alt citations invalid
+                A->>M: "fix your citations" (up to max_citation_retries)
+            else valid
+                A-->>CLI: answer + claims
+            end
+        end
+    end
+    CLI-->>You: answer, marked verified or unverified
+```
+
+### Data model
+
+```mermaid
+erDiagram
+    PROJECT ||--o{ EVIDENCE : collects
+    PROJECT ||--o{ ENTITY : contains
+    PROJECT ||--o{ FINDING : has
+    PROJECT ||--o{ JOB : has
+    PROJECT ||--o{ AUDIT_LOG : records
+    EVIDENCE }o--o{ ENTITY : "supports (entity_evidence)"
+    ENTITY ||--o{ RELATIONSHIP : "source of"
+    ENTITY ||--o{ RELATIONSHIP : "target of"
+    FINDING }o--o{ EVIDENCE : cites
+
+    PROJECT {
+        string name "stored as key/value pairs"
+        string client
+        string auth_ref
+        json scope
+        bool allow_cloud
+    }
+    EVIDENCE {
+        int id "E1, E2..."
+        string module "importer that produced it"
+        string query "source file"
+        text raw
+        string sha256
+        datetime fetched_at
+    }
+    ENTITY {
+        int id "N1, N2..."
+        string type "domain, subdomain, ip, url, technology..."
+        string value
+        bool in_scope
+        datetime first_seen
+        datetime last_seen
+    }
+    RELATIONSHIP {
+        int src_id
+        int dst_id
+        string type "has_subdomain, resolves_to, serves, runs"
+        int evidence_id
+    }
+    FINDING {
+        int id "F1, F2..."
+        string severity
+        string title
+        json evidence_ids
+        string status "draft, validated, rejected"
+        string created_by
+    }
+    JOB {
+        int id "J1, J2..."
+        string module
+        string target
+        string requested_by
+        string reason
+        string status "suggested, approved, denied, done"
+    }
+    AUDIT_LOG {
+        int id
+        datetime ts
+        string actor
+        string action
+        string target
+        json detail
+    }
+```
+
+The diagrams use [Mermaid](https://mermaid.js.org), which GitHub, GitLab and most Markdown editors render
+automatically.
+
 ## Install
 
 Requires Python 3.11+.
