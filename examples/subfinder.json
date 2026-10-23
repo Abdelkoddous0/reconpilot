@@ -1,0 +1,5 @@
+{"host":"www.example.com","input":"example.com","source":"crtsh"}
+{"host":"admin.example.com","input":"example.com","source":"crtsh"}
+{"host":"staging.example.com","input":"example.com","source":"virustotal"}
+{"host":"dev.example.com","input":"example.com","source":"crtsh"}
+{"host":"mail.example.com","input":"example.com","source":"dnsdumpster"}

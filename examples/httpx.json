@@ -1,0 +1,3 @@
+{"url":"https://www.example.com","input":"www.example.com","status_code":200,"title":"Example Corp","webserver":"nginx/1.24.0","tech":["Nginx:1.24.0","React"],"a":["10.0.0.10"]}
+{"url":"https://admin.example.com","input":"admin.example.com","status_code":200,"title":"Admin Login","webserver":"Apache/2.4.49","tech":["Apache HTTP Server:2.4.49","PHP:7.2.24"],"a":["10.0.0.20"]}
+{"url":"https://staging.example.com","input":"staging.example.com","status_code":200,"title":"Staging - WordPress","webserver":"nginx","tech":["WordPress:5.8","PHP:7.4"],"a":["10.0.0.30"]}
