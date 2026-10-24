@@ -1,0 +1,1 @@
+{"cmd":"-d example.com -b crtsh -f /out/harvest.json","emails":["info@example.com","not-an-email"],"hosts":["mail.example.com:10.0.0.25","www.example.com"],"ips":["10.0.0.10"],"shodan":[]}

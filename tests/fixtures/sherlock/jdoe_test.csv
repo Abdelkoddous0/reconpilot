@@ -1,0 +1,4 @@
+username,name,url_main,url_user,exists,http_status,response_time_s
+jdoe_test,GitHub,https://www.github.com/,https://www.github.com/jdoe_test,Claimed,200,0.412
+jdoe_test,Reddit,https://www.reddit.com/,https://www.reddit.com/user/jdoe_test,Claimed,200,0.633
+jdoe_test,Pinterest,https://www.pinterest.com/,https://www.pinterest.com/jdoe_test/,Available,404,0.201

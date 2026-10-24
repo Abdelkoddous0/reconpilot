@@ -170,7 +170,7 @@ def get_provider(spec: str, config: dict, *, allow_cloud: bool) -> ModelProvider
     if not provider.local and not allow_cloud:
         raise PrivacyError(
             f"{spec} is a cloud model but this project has allow_cloud=false; "
-            "use a local model or enable cloud with `reconpilot set <project> allow_cloud true`")
+            "use a local model or enable cloud for this project with: rp cloud on")
     return provider
 
 

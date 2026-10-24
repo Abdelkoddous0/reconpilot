@@ -2,8 +2,9 @@
 
 **A local-first OSINT workbench with an AI analyst that has to show its evidence.**
 
-You run your usual recon tools against targets you are **authorized** to test, import the results, and
-ReconPilot turns them into one searchable graph of hosts, IPs, URLs and technologies. Then an AI analyst
+ReconPilot runs OSINT and recon tools (Sherlock, Maigret, holehe, theHarvester, subfinder, dnsx, httpx) against
+targets you are **authorized** to investigate, or imports output you already have, and turns it into one
+searchable graph of hosts, IPs, URLs, technologies, usernames, accounts and emails. Then an AI analyst
 (your choice of model: local Qwen, Claude, Codex, GPT, Gemini...) triages the attack surface,
 drafts findings and suggests next steps. Every claim it makes must cite a stored piece of evidence.
 
@@ -36,8 +37,12 @@ drafts findings and suggests next steps. Every claim it makes must cite a stored
   back to the model.
 - **Scope is enforced.** No project without an authorization reference and a scope. Out-of-scope assets
   are flagged, and the AI cannot suggest steps against them.
-- **Human in the loop.** The AI only reads data. It never scans anything; its suggestions wait for
-  your approval.
+- **Runs your tools, safely.** `rp run sherlock jdoe` checks scope, engagement window and tool tier,
+  runs the tool without a shell, keeps its raw output, and imports the results. Playbooks chain tools.
+- **People, not only hosts.** Seed usernames, emails, phones or names; accounts found from them stay in
+  scope, everything else is kept as an out-of-scope lead.
+- **Human in the loop.** The AI only reads data. It never runs anything; its suggestions wait for
+  your approval (`rp approve J3`, then `rp run J3`).
 - **Audit trail.** Every import, AI tool call and decision is logged in an append-only table.
 
 ## Architecture
@@ -54,8 +59,14 @@ flowchart LR
         view["ui.py<br/>dashboard and tables"]
     end
 
+    subgraph tools["Tools"]
+        runner["tools/runner.py<br/>scope-gated execution"]
+        adapters["tools/*.py adapters<br/>sherlock, maigret, holehe,<br/>theHarvester, subfinder, httpx..."]
+        pb["playbook.py<br/>chains of tools"]
+    end
+
     subgraph core["Core"]
-        imp["importers.py<br/>parse tool output"]
+        imp["importers.py<br/>import files via adapters"]
         scope["scope.py<br/>scope engine"]
         store["store.py<br/>evidence store and graph"]
         report["report.py<br/>Markdown report"]
@@ -80,7 +91,11 @@ flowchart LR
     user --> cli & menu
     menu --> cli
     cli --> view
-    cli --> imp & store & analyst & report
+    cli --> imp & store & analyst & report & runner & pb
+    pb --> runner
+    runner --> adapters
+    runner --> scope
+    imp --> adapters
     files --> imp
     imp --> scope
     imp --> store
@@ -241,106 +256,37 @@ Optional: `uv pip install -e '.[anthropic]'` for the Claude API provider, `'.[de
 
 ## Quick start
 
-Try it with the fictional sample data in `examples/`:
+Try it with the fictional sample data in `examples/` and `tests/fixtures/`:
 
 ```bash
+rp doctor                     # what is installed and ready
 rp new lab --client "Example Corp" --auth-ref "RoE-2026-001" \
-   --scope example.com --scope 10.0.0.0/24 --exclude dev.example.com
-rp import examples/subfinder.json examples/httpx.json
+   --scope example.com --scope 10.0.0.0/24 --exclude dev.example.com --seed username:jdoe_test
+rp import examples/subfinder.json examples/httpx.json tests/fixtures/sherlock/jdoe_test.csv
 rp status                     # dashboard
 rp search admin               # find assets
-rp show N3                    # an asset, its relationships and evidence
+rp search -t account          # accounts found for jdoe_test
+rp show N3                    # an entity, its relationships and evidence
 rp triage                     # AI review: draft findings + suggested steps
 rp findings                   # review what the AI found
 rp accept F1                  # accept a finding (or: rp reject F1)
-rp report                     # writes lab-report.md
+rp report --format html       # writes lab-report.html
+```
+
+With the tools installed, collect data directly instead of importing:
+
+```bash
+rp run sherlock jdoe_test             # one tool
+rp run username-sweep jdoe_test       # a playbook: sherlock, maigret, holehe, AI summary
 ```
 
 Or just run **`rp`** with no arguments for the interactive menu (arrow keys, enter to select).
 
-Running `rp new` with no arguments asks for each detail step by step.
-
 ## Usage guide
 
-A real engagement, step by step.
-
-### 1. Pick an AI model (once)
-
-Local, so data stays on your machine (recommended):
-
-```bash
-curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen2.5:14b
-```
-
-Or use the Claude Code / Codex CLI you already have (data goes to the cloud, so enable it per project
-with `rp cloud on`):
-
-```bash
-rp ask -m claude-cli:default "summarize the attack surface"
-```
-
-`rp models` shows which backends are ready.
-
-### 2. Create a project per engagement
-
-```bash
-rp new acme --client "Acme Corp" --auth-ref "RoE-2026-07" \
-   --scope acme.com --scope 10.0.0.0/24 --exclude vpn.acme.com
-```
-
-It becomes the active project, so later commands don't need its name.
-
-### 3. Import your recon results
-
-Run your usual tools against authorized targets, save their JSON output, then:
-
-```bash
-rp import results/subs.json results/http.json
-```
-
-### 4. Explore
-
-```bash
-rp status                 # dashboard
-rp search admin           # find assets
-rp search -t ip           # only IPs
-rp search --out           # assets found outside your scope
-rp show N3                # one asset, its relationships and evidence
-```
-
-### 5. Let the AI analyst work
-
-```bash
-rp triage                                  # reviews everything, drafts findings, suggests next steps
-rp ask "which hosts run outdated software?"
-rp chat                                    # conversation, /exit to quit
-```
-
-Every claim cites evidence like `E7`. Check it with `rp show E7`.
-
-### 6. Review what it produced
-
-```bash
-rp findings               # draft findings
-rp accept F1 F3           # keep these
-rp reject F2              # drop this one
-rp steps                  # suggested next steps
-rp approve J1             # run it yourself, then rp import the output
-rp done J1
-```
-
-### 7. Write the report
-
-```bash
-rp report                 # writes acme-report.md with accepted findings
-```
-
-### Shortcuts
-
-- `rp` with no arguments opens the arrow-key menu.
-- `rp use other-project` switches the active project.
-- `rp log` shows everything that happened, including each AI tool call.
+The full guide is in **[docs/USAGE.md](docs/USAGE.md)**: installing the tools, person-focused
+investigations, playbooks (and writing your own), scope and policy, the AI analyst, reports, exports,
+scripting with `--json`, adding your own tool adapter, and troubleshooting.
 
 ## Commands
 
@@ -350,38 +296,56 @@ or target another one for a single command with `-p <name>`.
 | Command | Alias | What it does |
 | --- | --- | --- |
 | `rp` | `rp menu` | Interactive menu |
+| `rp doctor` | | Check Python, config, data dir, tools and AI models, with fixes |
 | `rp new [name]` | `init` | Create a project (asks for missing details) |
 | `rp use <name>` | | Switch the active project |
 | `rp ls` | `projects` | List projects (● marks the active one) |
 | `rp status` | `st` | Dashboard: scope, counts, findings, pending steps, what to do next |
-| `rp import <files...>` | `i` | Import tool output; format is auto-detected |
-| `rp search [text] [-t type]` | `s` | Search assets; `--out` for out-of-scope, `--all` for both |
+| `rp scope [show\|add\|remove\|window]` | | Show or change the scope; entities are re-flagged |
+| `rp seed <type> <values...>` | | Add people to investigate: username, email, phone, person |
+| `rp policy low-touch\|active on\|off` | | Allow or block tools by tier |
+| `rp cloud on\|off` | | Allow or block cloud AI for the active project |
+| `rp tools` | | Tools, whether they are installed, tier and target type |
+| `rp playbooks` | | Available playbooks |
+| `rp run <tool> <target>` | | Run a tool under the scope gate and import its results |
+| `rp run <playbook> <target>` | | Run a chain of tools |
+| `rp run J<id>` | | Run an approved AI-suggested step |
+| `rp import <files...>` | `i` | Import tool output; the tool is auto-detected |
+| `rp search [text] [-t type]` | `s` | Search entities; `--out` for out-of-scope, `--all` for both |
 | `rp show <N\|E\|F id>` | | Details of an entity (N12), evidence (E12) or finding (F3) |
-| `rp triage [-m model]` | | AI reviews the whole attack surface |
+| `rp triage [--identity] [-m model]` | | AI reviews the whole attack surface or identity footprint |
 | `rp ask "question" [-m model]` | | One question to the AI analyst |
 | `rp chat [-m model]` | | Conversation with the AI analyst (`/exit`, `/status`) |
 | `rp findings` | `f` | List findings |
 | `rp accept / reject <F ids...>` | | Review draft findings |
 | `rp steps` | `jobs` | Next steps suggested by the AI |
 | `rp approve / deny / done <J ids...>` | | Review suggested steps |
-| `rp report [-o file] [--drafts]` | | Markdown report of accepted findings |
+| `rp report [--format md\|html] [--drafts]` | | Report of accepted findings |
+| `rp export [--format json\|csv\|graphml]` | | Export entities and relationships |
 | `rp log` | `audit` | Audit log |
 | `rp models` | | Model backends and whether they are ready |
-| `rp cloud on\|off` | | Allow or block cloud AI for the active project |
 
-## Importing data
+`status`, `search`, `show`, `findings`, `steps`, `tools` and `scope show` accept `--json`.
 
-Each input line becomes one evidence record (`E<n>`) that the AI can cite.
+## Supported tools
 
-| Source | Expected file |
-| --- | --- |
-| subfinder | JSON lines (`-oJ`) |
-| amass | JSON lines (`enum -json`, v3 format) |
-| dnsx | JSON lines (`-json`) |
-| httpx | JSON lines (`-json`) |
-| anything else | a plain text list of hosts, one per line |
+Each record a tool outputs becomes one evidence record (`E<n>`) that the AI can cite. Re-importing the
+same file never duplicates evidence.
 
-Force a format with `rp import file --format httpx` if detection guesses wrong.
+| Tool | Finds | `rp run` | Import file |
+| --- | --- | --- | --- |
+| sherlock | accounts for a username | yes (passive) | `<username>.csv` (`--csv`) |
+| maigret | accounts + profile data | yes (passive) | `report_<username>_ndjson.json` (`--json ndjson`) |
+| holehe | sites an email is registered on | yes (low-touch) | `holehe_<ts>_<email>_results.csv` (`-C`) |
+| theHarvester | emails, hosts, IPs | yes (passive) | `-f` JSON |
+| subfinder | subdomains | yes (passive) | JSON lines (`-oJ`) |
+| dnsx | DNS records | yes (passive) | JSON lines (`-json`) |
+| httpx | web services, technologies | yes (low-touch) | JSON lines (`-json`) |
+| amass | subdomains | import only | v3 `enum -json` |
+| anything else | | | a plain text list of hosts, one per line |
+
+Force a format with `rp import file --format <tool>` if detection guesses wrong. To add a tool, write a
+small adapter class; see [docs/USAGE.md](docs/USAGE.md#13-add-your-own-tool).
 
 ## Choosing an AI model
 
@@ -428,28 +392,40 @@ Tip: local models under ~14B parameters struggle with multi-step tool use. Use 1
 
 ```text
 reconpilot/
-  cli.py          commands          shell.py     interactive menu
-  ui.py           terminal output   importers.py tool output parsers
-  scope.py        scope engine      store.py     SQLite evidence store and graph
-  report.py       Markdown report
-  ai/providers.py model backends    ai/analyst.py agent loop and citation check
-tests/            pytest suite      examples/    fictional sample data
+  cli.py           commands            shell.py       interactive menu
+  ui.py            terminal output     importers.py   file import via adapters
+  scope.py         scope + subjects    store.py       SQLite evidence store, graph, migrations
+  report.py        Markdown / HTML     export.py      JSON / CSV / GraphML
+  playbook.py      playbook engine     playbooks/     built-in playbooks (YAML)
+  tools/base.py    adapter interface   tools/runner.py  scope-gated tool execution
+  tools/infra.py   subfinder, dnsx, httpx, amass, host lists
+  tools/identity.py sherlock, maigret, holehe, theHarvester
+  ai/providers.py  model backends      ai/analyst.py  agent loop and citation check
+tests/             pytest suite        tests/fixtures/  real-format tool output samples
+docs/USAGE.md      full usage guide    examples/      fictional sample data
 ```
 
 ## Development
 
 ```bash
 uv pip install -e '.[dev]'
+ruff check reconpilot tests
+mypy reconpilot
 pytest
 ```
 
 ## Roadmap
 
 - [x] Scope engine, evidence store, importers, AI analyst, CLI and interactive menu
-- [ ] Web dashboard with an interactive graph view
-- [ ] PDF report export
+- [x] Tool adapters and scope-gated runner (`rp run`), `rp tools`, `rp doctor`, plugin entry point
+- [x] Identity OSINT: subjects in scope, Sherlock, Maigret, holehe, theHarvester, playbooks
+- [x] Evidence dedupe, schema migrations, scope editing with re-flagging, engagement window enforced
+- [x] `--json` output, JSON / CSV / GraphML export, HTML report, CI (ruff, mypy, pytest)
+- [ ] More adapters: Blackbird, PhoneInfoga, h8mail, exiftool, gau
+- [ ] PyPI release and a Docker image with the tools preinstalled
+- [ ] `rp diff` (what is new since the last run), `rp setup` wizard, shell completion
+- [ ] Local web UI with an interactive graph view
 - [ ] Evaluation set to compare models on real engagements
-- [ ] More import formats
 
 ## Legal
 

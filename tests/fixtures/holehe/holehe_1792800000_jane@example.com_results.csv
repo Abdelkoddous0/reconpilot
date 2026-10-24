@@ -1,0 +1,5 @@
+name,domain,method,frequent_rate_limit,rateLimit,exists,emailrecovery,phoneNumber,others
+aboutme,about.me,register,False,False,False,,,
+spotify,spotify.com,register,False,False,True,,,
+twitter,twitter.com,register,False,False,True,,,
+instagram,instagram.com,register,True,True,False,,,

@@ -1,0 +1,13 @@
+name: username-sweep
+description: Find accounts for a username, then check which services its in-scope emails use.
+input: username
+steps:
+  - tool: sherlock
+  - tool: maigret
+  - tool: holehe
+    for_each: email
+    requires_approval: true
+    max_targets: 5
+  - analyst: >-
+      Summarize the online footprint of the username in scope: which accounts exist, what they reveal,
+      and which emails are linked. Cite evidence for every claim.

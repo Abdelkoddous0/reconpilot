@@ -18,6 +18,21 @@ models:
       local: true
 
 analyst:
-  max_steps: 12
+  max_steps: 20
   max_citation_retries: 2
   evidence_char_limit: 4000
+  history_char_limit: 1500     # older tool results are shortened so long sessions fit small models
+
+# Options for `rp run <tool>`. Every tool also accepts `timeout` (seconds).
+tools:
+  sherlock:
+    request_timeout: 30        # per-site timeout
+    local: false               # true = use sherlock's bundled site list instead of downloading it
+  maigret:
+    all_sites: false           # true = check every site, not the top 500
+  theharvester:
+    sources: crtsh,certspotter,hackertarget,otx,rapiddns,urlscan   # these need no API key
+    limit: 500
+
+# Extra folders with playbook YAML files (./playbooks and ~/.config/reconpilot/playbooks are always read).
+playbook_dirs: []
