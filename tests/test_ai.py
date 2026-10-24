@@ -4,8 +4,7 @@ import sys
 import pytest
 
 from reconpilot.ai.analyst import Analyst, extract_json, wrap_untrusted
-from reconpilot.ai.providers import (CLIProvider, ModelProvider, PrivacyError, ProviderError,
-                                     get_provider, parse_spec)
+from reconpilot.ai.providers import CLIProvider, ModelProvider, PrivacyError, ProviderError, get_provider, parse_spec
 
 
 class ScriptedProvider(ModelProvider):
@@ -100,3 +99,49 @@ def test_ai_finding_requires_evidence(store, config):
     analyst = Analyst(store, ScriptedProvider([]), config)
     out = analyst.call_tool("create_finding", {"title": "t", "severity": "high", "evidence_ids": []})
     assert out.startswith("ERROR")
+
+
+def test_suggestions_must_use_known_tools_and_are_deduplicated(store, config):
+    analyst = Analyst(store, ScriptedProvider([]), config)
+    assert analyst.call_tool("suggest_next_step",
+                             {"tool": "nmap-everything", "target": "example.com", "reason": "r"}).startswith("REFUSED")
+    first = analyst.call_tool("suggest_next_step", {"tool": "subfinder", "target": "example.com", "reason": "r"})
+    again = analyst.call_tool("suggest_next_step", {"tool": "subfinder", "target": "example.com", "reason": "r"})
+    assert "J1" in first and "Already queued as J1" in again
+    assert store.jobs()[0]["tier"] == "passive"
+    assert any(t["tool"] == "sherlock" for t in json.loads(analyst.call_tool("list_tools", {})))
+
+
+def test_duplicate_finding_titles_are_refused(store, config):
+    ev = store.add_evidence("test", "q", "raw")
+    analyst = Analyst(store, ScriptedProvider([]), config)
+    args = {"title": "Exposed admin", "severity": "high", "evidence_ids": [f"E{ev}"]}
+    assert "F1" in analyst.call_tool("create_finding", args)
+    assert "already exists" in analyst.call_tool("create_finding", args)
+
+
+def test_old_tool_results_are_compacted(store, config):
+    config["analyst"]["history_char_limit"] = 50
+    analyst = Analyst(store, ScriptedProvider([]), config)
+    msgs = [{"role": "user", "content": "q"}] + [
+        {"role": r, "content": ("TOOL RESULT (x):\n" + "y" * 500) if r == "user" else "{}"}
+        for r in ("assistant", "user", "assistant", "user", "assistant", "user")]
+    out = analyst._compact(msgs)
+    assert "shortened" in out[2]["content"] and len(out[-1]["content"]) > 500
+
+
+def test_privacy_hint_names_real_command(config):
+    with pytest.raises(PrivacyError, match="rp cloud on"):
+        get_provider("anthropic:claude-opus-5-5", config, allow_cloud=False)
+
+
+def test_model_is_told_to_finish_before_budget_runs_out(store, config):
+    config["analyst"]["max_steps"] = 3
+    ev = store.add_evidence("test", "q", "raw")
+    provider = ScriptedProvider([
+        json.dumps({"tool": "stats", "args": {}}),
+        final(f"Done [E{ev}].", [{"text": "done", "evidence_ids": [f"E{ev}"]}]),
+    ])
+    result = Analyst(store, provider, config).ask("q")
+    assert result.validated
+    assert "STEP BUDGET" in provider.seen[1][-1]["content"]

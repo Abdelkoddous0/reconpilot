@@ -1,0 +1,16 @@
+name: domain-surface
+description: Subdomains, DNS, web services and public emails for a domain.
+input: domain
+steps:
+  - tool: subfinder
+  - tool: theharvester
+  - tool: dnsx
+    for_each: subdomain
+    max_targets: 50
+  - tool: httpx
+    for_each: subdomain
+    requires_approval: true
+    max_targets: 25
+  - analyst: >-
+      Triage the attack surface found for this domain. Check list_findings first, draft findings with
+      evidence, and give a prioritized summary.

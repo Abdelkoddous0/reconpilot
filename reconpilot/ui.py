@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from rich import box
 from rich.columns import Columns
@@ -82,6 +83,37 @@ def entities_table(store: Store, rows) -> Table:
     return t
 
 
+def scope_table(scope) -> Table:
+    t = table("Kind", "Value", "Note")
+    for d in scope.domains:
+        t.add_row("[ok]domain[/]", d, "")
+    for n in scope.networks:
+        t.add_row("[ok]network[/]", n, "")
+    for s in scope.subjects:
+        t.add_row(f"[ok]{s['type']}[/]", s["value"], f"[muted]{s.get('note', '')}[/]")
+    for d in scope.exclude_domains + scope.exclude_networks:
+        t.add_row("[warn]excluded[/]", d, "")
+    if scope.start or scope.end:
+        t.add_row("[muted]window[/]", f"{scope.start or '…'} → {scope.end or '…'}",
+                  "" if scope.is_active_window() else "[bad]not active[/]")
+    return t
+
+
+def tools_table(rows) -> Table:
+    t = table("Tool", "Status", "Tier", "Takes", "What it does")
+    tiers = {"passive": "[ok]passive[/]", "low_touch": "[warn]low-touch[/]", "active": "[bad]active[/]"}
+    for adapter, status in rows:
+        if not adapter.runnable:
+            state = "[muted]import only[/]"
+        elif status.ok:
+            state = f"[ok]ready[/] [muted]{status.version or ''}[/]"
+        else:
+            state = f"[warn]{status.problem}[/]"
+        t.add_row(f"[bold]{adapter.name}[/]", state, tiers.get(adapter.tier, adapter.tier),
+                  ", ".join(adapter.accepts) or "[muted]file[/]", adapter.description)
+    return t
+
+
 def findings_table(rows) -> Table:
     t = table("ID", "Severity", "Title", "Status", "Evidence", "By")
     for f in rows:
@@ -111,7 +143,9 @@ def dashboard(store: Store, model_spec: str) -> Panel:
     header.add_column()
     header.add_row("Client", meta["client"])
     header.add_row("Authorization", meta["auth_ref"])
-    header.add_row("In scope", ", ".join(scope["domains"] + scope["networks"]))
+    header.add_row("In scope", ", ".join(scope["domains"] + scope["networks"]) or "[muted]no infrastructure[/]")
+    if scope.get("subjects"):
+        header.add_row("Subjects", ", ".join(f"{s['type']}:{s['value']}" for s in scope["subjects"]))
     header.add_row("Excluded", ", ".join(scope["exclude_domains"] + scope["exclude_networks"]) or "[muted]none[/]")
     if scope.get("start") or scope.get("end"):
         header.add_row("Window", f"{scope.get('start') or '…'} → {scope.get('end') or '…'}")
@@ -130,11 +164,13 @@ def dashboard(store: Store, model_spec: str) -> Panel:
         tile("IPs", counts.get("ip", 0)),
         tile("URLs", counts.get("url", 0)),
         tile("tech", counts.get("technology", 0)),
+        *([tile("accounts", counts.get("account", 0)), tile("emails", counts.get("email", 0))]
+          if counts.get("account") or counts.get("email") or scope.get("subjects") else []),
         tile("evidence", stats["evidence_records"], "muted"),
         tile("outside", stats["out_of_scope_entities"], "warn"),
     ])
 
-    parts = [header, Text(), tiles]
+    parts: list[Any] = [header, Text(), tiles]
     if findings:
         parts += [Text(), findings_table(findings[:6])]
     if pending:
@@ -142,14 +178,15 @@ def dashboard(store: Store, model_spec: str) -> Panel:
 
     next_steps = []
     if stats["evidence_records"] == 0:
-        next_steps.append("rp import <file>   load subfinder / amass / dnsx / httpx output")
+        next_steps.append("rp run <tool> <target>   run a recon tool (list: rp tools)")
+        next_steps.append("rp import <file>         or load output you already have")
     else:
         next_steps.append("rp triage          let the AI analyst review the attack surface")
         next_steps.append("rp chat            ask the analyst questions")
     if open_findings:
         next_steps.append(f"rp accept F{open_findings[0]['id']}       review draft findings")
     if pending:
-        next_steps.append(f"rp approve J{pending[0]['id']}      review suggested steps")
+        next_steps.append(f"rp approve J{pending[0]['id']}      review suggested steps, then rp run J<id>")
     parts += [Text(), Text("Next", style="bold"), *[Text("  " + s, style="muted") for s in next_steps]]
 
     return Panel(Group(*parts), title=f"[brand]◆ {meta['name']}[/]", border_style="cyan",

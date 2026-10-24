@@ -1,0 +1,7 @@
+name: email-footprint
+description: Check which services an email address is registered on.
+input: email
+steps:
+  - tool: holehe
+  - analyst: >-
+      Summarize where this email is registered and what that exposes. Cite evidence for every claim.
