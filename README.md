@@ -1,433 +1,368 @@
-# ◆ ReconPilot
+# ReconPilot
 
-**A local-first OSINT workbench with an AI analyst that has to show its evidence.**
+**An OSINT workbench that runs your recon tools, connects their results, and lets an AI analyst review them, with evidence for every claim.**
 
-ReconPilot runs OSINT and recon tools (Sherlock, Maigret, holehe, theHarvester, subfinder, dnsx, httpx) against
-targets you are **authorized** to investigate, or imports output you already have, and turns it into one
-searchable graph of hosts, IPs, URLs, technologies, usernames, accounts and emails. Then an AI analyst
-(your choice of model: local Qwen, Claude, Codex, GPT, Gemini...) triages the attack surface,
-drafts findings and suggests next steps. Every claim it makes must cite a stored piece of evidence.
+[![CI](https://github.com/Abdelkoddous0/reconpilot/actions/workflows/ci.yml/badge.svg)](https://github.com/Abdelkoddous0/reconpilot/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![Local first](https://img.shields.io/badge/data-local%20first-green)
 
-```text
-╭──────────────────────────────── ◆ lab ────────────────────────────────╮
-│  Client         Example Corp                                          │
-│  Authorization  RoE-2026-001                                          │
-│  In scope       example.com, 10.0.0.0/24                              │
-│  Cloud AI       blocked (local only)                                  │
-│                                                                       │
-│  ╭─ domains ──╮ ╭─── IPs ────╮ ╭─── URLs ───╮ ╭─── tech ───╮          │
-│  │     5      │ │     3      │ │     3      │ │     9      │          │
-│  ╰────────────╯ ╰────────────╯ ╰────────────╯ ╰────────────╯          │
-│                                                                       │
-│   ID   Severity   Title                                   Status      │
-│   F1   HIGH       Outdated Apache 2.4.49 on admin panel   draft       │
-│                                                                       │
-│  Next                                                                 │
-│    rp triage          let the AI analyst review the attack surface    │
-│    rp accept F1       review draft findings                           │
-╰───────────────────────────────────────────────────────────────────────╯
-```
+ReconPilot is a command-line tool for open-source intelligence (OSINT) and external reconnaissance.
+You give it a target you are authorized to investigate (a domain, a username, an email). It runs
+well-known tools such as **Sherlock**, **Maigret**, **holehe**, **theHarvester**, **subfinder**, **dnsx** and **httpx**, then
+stores everything they find in one local database where results are linked together.
+
+An AI analyst (a local model or a cloud model, your choice) can then review the data, answer questions,
+draft findings and suggest next steps. It cannot make things up: every statement it makes must point to
+a stored record, and answers that don't are rejected.
+
+---
+
+## Contents
+
+- [Why ReconPilot](#why-reconpilot)
+- [How it works](#how-it-works)
+- [Supported tools](#supported-tools)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Example workflows](#example-workflows)
+- [The AI analyst](#the-ai-analyst)
+- [Safety and scope](#safety-and-scope)
+- [Command reference](#command-reference)
+- [Configuration](#configuration)
+- [Project structure](#project-structure)
+- [Development](#development)
+- [Legal](#legal)
+
+---
 
 ## Why ReconPilot
 
-- **Local-first.** Everything lives in one SQLite file per engagement on your machine.
-- **Any model.** Local models through Ollama, LM Studio or llama.cpp; cloud APIs; or the Codex and
-  Claude Code CLIs you already pay for. Pick per project or per question.
-- **No hallucinated findings.** Answers and findings without valid evidence IDs are rejected and sent
-  back to the model.
-- **Scope is enforced.** No project without an authorization reference and a scope. Out-of-scope assets
-  are flagged, and the AI cannot suggest steps against them.
-- **Runs your tools, safely.** `rp run sherlock jdoe` checks scope, engagement window and tool tier,
-  runs the tool without a shell, keeps its raw output, and imports the results. Playbooks chain tools.
-- **People, not only hosts.** Seed usernames, emails, phones or names; accounts found from them stay in
-  scope, everything else is kept as an out-of-scope lead.
-- **Human in the loop.** The AI only reads data. It never runs anything; its suggestions wait for
-  your approval (`rp approve J3`, then `rp run J3`).
-- **Audit trail.** Every import, AI tool call and decision is logged in an append-only table.
+Running OSINT tools one by one leaves you with a folder of CSV and JSON files that don't talk to each
+other. ReconPilot fixes that:
 
-## Architecture
+| Problem | What ReconPilot does |
+| --- | --- |
+| Every tool has its own output format | Reads them all and stores the results in one place |
+| Results are disconnected | Links them: a username → its accounts → the emails and names they expose |
+| Easy to scan something you shouldn't | Checks every target against the scope you set before anything runs |
+| AI tools invent facts | The analyst must cite a stored record for every claim, or its answer is rejected |
+| Client data sent to the cloud | Cloud AI is off by default; local models (Ollama, LM Studio) work out of the box |
+| No record of what was done | Every tool run, import and AI action is written to a log that cannot be edited |
 
-### Components
+---
 
-```mermaid
-flowchart LR
-    user(["👤 You"])
+## How it works
 
-    subgraph ui["Terminal interface"]
-        cli["cli.py<br/>rp commands"]
-        menu["shell.py<br/>interactive menu"]
-        view["ui.py<br/>dashboard and tables"]
-    end
-
-    subgraph tools["Tools"]
-        runner["tools/runner.py<br/>scope-gated execution"]
-        adapters["tools/*.py adapters<br/>sherlock, maigret, holehe,<br/>theHarvester, subfinder, httpx..."]
-        pb["playbook.py<br/>chains of tools"]
-    end
-
-    subgraph core["Core"]
-        imp["importers.py<br/>import files via adapters"]
-        scope["scope.py<br/>scope engine"]
-        store["store.py<br/>evidence store and graph"]
-        report["report.py<br/>Markdown report"]
-    end
-
-    subgraph ai["AI layer"]
-        analyst["ai/analyst.py<br/>agent loop and citation check"]
-        gate{"Privacy gate<br/>allow_cloud?"}
-        prov["ai/providers.py"]
-    end
-
-    subgraph models["Model backends"]
-        local["Local<br/>Ollama · LM Studio · llama.cpp"]
-        cloud["Cloud APIs<br/>Anthropic · OpenAI · Gemini · OpenRouter"]
-        clis["CLIs<br/>codex · claude"]
-    end
-
-    db[("SQLite<br/>one file per project")]
-    files[/"Tool output files<br/>JSON lines / host lists"/]
-    md[/"report.md"/]
-
-    user --> cli & menu
-    menu --> cli
-    cli --> view
-    cli --> imp & store & analyst & report & runner & pb
-    pb --> runner
-    runner --> adapters
-    runner --> scope
-    imp --> adapters
-    files --> imp
-    imp --> scope
-    imp --> store
-    store <--> db
-    analyst -- "read-only tools" --> store
-    analyst --> scope
-    analyst --> prov
-    prov --> gate
-    gate -- "always" --> local
-    gate -- "only if allowed" --> cloud & clis
-    report --> md
+```text
+1. Create a project   →  rp new      what you are allowed to investigate (domains, usernames, emails)
+2. Collect data       →  rp run      runs a tool, or a chain of tools, after checking the scope
+                         rp import   or loads output files you already have
+3. Explore            →  rp search   everything is linked: accounts, emails, hosts, IPs
+4. Analyse            →  rp triage   the AI reviews the data and drafts findings with evidence
+5. Review             →  rp accept   you decide what is real
+6. Report             →  rp report   Markdown or HTML report, plus CSV / JSON / GraphML export
 ```
 
-### Data flow: from raw output to a report
+Each piece of data keeps a reference to the exact tool output it came from (shown as `E12`). Entities
+such as hosts, accounts and emails are shown as `N12`, findings as `F3`, and tool runs as `J4`.
 
-```mermaid
-flowchart TD
-    A[/"Tool output you collected<br/>on authorized targets"/] --> B["rp import"]
-    B --> C["Evidence records E1, E2...<br/>raw line + SHA-256 hash"]
-    C --> D["Entities N1, N2...<br/>domains, IPs, URLs, tech"]
-    D --> E{"In scope?"}
-    E -- yes --> F["Attack surface graph"]
-    E -- no --> G["Flagged 'outside'<br/>hidden from the AI's suggestions"]
-    F --> H["rp triage / rp ask / rp chat"]
-    H --> I["Draft findings F1...<br/>must cite evidence"]
-    H --> J["Suggested steps J1...<br/>in-scope targets only"]
-    I --> K{"You review"}
-    J --> L{"You review"}
-    K -- accept --> M["Accepted findings"]
-    K -- reject --> N["Rejected"]
-    L -- approve --> O["You run it yourself,<br/>then import the result"]
-    O --> B
-    M --> P["rp report → report.md"]
-
-    C -.-> Q[("Append-only audit log")]
-    H -.-> Q
-    K -.-> Q
-    L -.-> Q
-```
-
-### How a question to the AI analyst is answered
-
-```mermaid
-sequenceDiagram
-    actor You
-    participant CLI as rp ask / chat / triage
-    participant A as Analyst
-    participant M as Model (any provider)
-    participant S as Store
-
-    You->>CLI: question
-    CLI->>A: ask(question)
-    loop up to max_steps
-        A->>M: persona + tools + conversation
-        M-->>A: JSON tool call or final answer
-        alt tool call
-            A->>S: search / get_entity / get_evidence / stats
-            S-->>A: data wrapped as untrusted collected_data
-            A->>S: log the tool call to the audit log
-        else draft finding or suggested step
-            A->>S: check scope and evidence IDs, then save as draft / suggested
-        else final answer
-            A->>A: citation check (are all E-ids real?)
-            alt citations invalid
-                A->>M: "fix your citations" (up to max_citation_retries)
-            else valid
-                A-->>CLI: answer + claims
-            end
-        end
-    end
-    CLI-->>You: answer, marked verified or unverified
-```
-
-### Data model
-
-```mermaid
-erDiagram
-    PROJECT ||--o{ EVIDENCE : collects
-    PROJECT ||--o{ ENTITY : contains
-    PROJECT ||--o{ FINDING : has
-    PROJECT ||--o{ JOB : has
-    PROJECT ||--o{ AUDIT_LOG : records
-    EVIDENCE }o--o{ ENTITY : "supports (entity_evidence)"
-    ENTITY ||--o{ RELATIONSHIP : "source of"
-    ENTITY ||--o{ RELATIONSHIP : "target of"
-    FINDING }o--o{ EVIDENCE : cites
-
-    PROJECT {
-        string name "stored as key/value pairs"
-        string client
-        string auth_ref
-        json scope
-        bool allow_cloud
-    }
-    EVIDENCE {
-        int id "E1, E2..."
-        string module "importer that produced it"
-        string query "source file"
-        text raw
-        string sha256
-        datetime fetched_at
-    }
-    ENTITY {
-        int id "N1, N2..."
-        string type "domain, subdomain, ip, url, technology..."
-        string value
-        bool in_scope
-        datetime first_seen
-        datetime last_seen
-    }
-    RELATIONSHIP {
-        int src_id
-        int dst_id
-        string type "has_subdomain, resolves_to, serves, runs"
-        int evidence_id
-    }
-    FINDING {
-        int id "F1, F2..."
-        string severity
-        string title
-        json evidence_ids
-        string status "draft, validated, rejected"
-        string created_by
-    }
-    JOB {
-        int id "J1, J2..."
-        string module
-        string target
-        string requested_by
-        string reason
-        string status "suggested, approved, denied, done"
-    }
-    AUDIT_LOG {
-        int id
-        datetime ts
-        string actor
-        string action
-        string target
-        json detail
-    }
-```
-
-The diagrams use [Mermaid](https://mermaid.js.org), which GitHub, GitLab and most Markdown editors render
-automatically.
-
-## Install
-
-Requires Python 3.11+.
-
-```bash
-git clone <your-repo-url> reconpilot && cd reconpilot
-uv venv && uv pip install -e .          # or: python -m venv .venv && .venv/bin/pip install -e .
-source .venv/bin/activate
-rp --help
-```
-
-Optional: `uv pip install -e '.[anthropic]'` for the Claude API provider, `'.[dev]'` for the tests.
-
-## Quick start
-
-Try it with the fictional sample data in `examples/` and `tests/fixtures/`:
-
-```bash
-rp doctor                     # what is installed and ready
-rp new lab --client "Example Corp" --auth-ref "RoE-2026-001" \
-   --scope example.com --scope 10.0.0.0/24 --exclude dev.example.com --seed username:jdoe_test
-rp import examples/subfinder.json examples/httpx.json tests/fixtures/sherlock/jdoe_test.csv
-rp status                     # dashboard
-rp search admin               # find assets
-rp search -t account          # accounts found for jdoe_test
-rp show N3                    # an entity, its relationships and evidence
-rp triage                     # AI review: draft findings + suggested steps
-rp findings                   # review what the AI found
-rp accept F1                  # accept a finding (or: rp reject F1)
-rp report --format html       # writes lab-report.html
-```
-
-With the tools installed, collect data directly instead of importing:
-
-```bash
-rp run sherlock jdoe_test             # one tool
-rp run username-sweep jdoe_test       # a playbook: sherlock, maigret, holehe, AI summary
-```
-
-Or just run **`rp`** with no arguments for the interactive menu (arrow keys, enter to select).
-
-## Usage guide
-
-The full guide is in **[docs/USAGE.md](docs/USAGE.md)**: installing the tools, person-focused
-investigations, playbooks (and writing your own), scope and policy, the AI analyst, reports, exports,
-scripting with `--json`, adding your own tool adapter, and troubleshooting.
-
-## Commands
-
-The active project is remembered, so you never type its name. Switch with `rp use <name>`,
-or target another one for a single command with `-p <name>`.
-
-| Command | Alias | What it does |
-| --- | --- | --- |
-| `rp` | `rp menu` | Interactive menu |
-| `rp doctor` | | Check Python, config, data dir, tools and AI models, with fixes |
-| `rp new [name]` | `init` | Create a project (asks for missing details) |
-| `rp use <name>` | | Switch the active project |
-| `rp ls` | `projects` | List projects (● marks the active one) |
-| `rp status` | `st` | Dashboard: scope, counts, findings, pending steps, what to do next |
-| `rp scope [show\|add\|remove\|window]` | | Show or change the scope; entities are re-flagged |
-| `rp seed <type> <values...>` | | Add people to investigate: username, email, phone, person |
-| `rp policy low-touch\|active on\|off` | | Allow or block tools by tier |
-| `rp cloud on\|off` | | Allow or block cloud AI for the active project |
-| `rp tools` | | Tools, whether they are installed, tier and target type |
-| `rp playbooks` | | Available playbooks |
-| `rp run <tool> <target>` | | Run a tool under the scope gate and import its results |
-| `rp run <playbook> <target>` | | Run a chain of tools |
-| `rp run J<id>` | | Run an approved AI-suggested step |
-| `rp import <files...>` | `i` | Import tool output; the tool is auto-detected |
-| `rp search [text] [-t type]` | `s` | Search entities; `--out` for out-of-scope, `--all` for both |
-| `rp show <N\|E\|F id>` | | Details of an entity (N12), evidence (E12) or finding (F3) |
-| `rp triage [--identity] [-m model]` | | AI reviews the whole attack surface or identity footprint |
-| `rp ask "question" [-m model]` | | One question to the AI analyst |
-| `rp chat [-m model]` | | Conversation with the AI analyst (`/exit`, `/status`) |
-| `rp findings` | `f` | List findings |
-| `rp accept / reject <F ids...>` | | Review draft findings |
-| `rp steps` | `jobs` | Next steps suggested by the AI |
-| `rp approve / deny / done <J ids...>` | | Review suggested steps |
-| `rp report [--format md\|html] [--drafts]` | | Report of accepted findings |
-| `rp export [--format json\|csv\|graphml]` | | Export entities and relationships |
-| `rp log` | `audit` | Audit log |
-| `rp models` | | Model backends and whether they are ready |
-
-`status`, `search`, `show`, `findings`, `steps`, `tools` and `scope show` accept `--json`.
+---
 
 ## Supported tools
 
-Each record a tool outputs becomes one evidence record (`E<n>`) that the AI can cite. Re-importing the
-same file never duplicates evidence.
-
-| Tool | Finds | `rp run` | Import file |
-| --- | --- | --- | --- |
-| sherlock | accounts for a username | yes (passive) | `<username>.csv` (`--csv`) |
-| maigret | accounts + profile data | yes (passive) | `report_<username>_ndjson.json` (`--json ndjson`) |
-| holehe | sites an email is registered on | yes (low-touch) | `holehe_<ts>_<email>_results.csv` (`-C`) |
-| theHarvester | emails, hosts, IPs | yes (passive) | `-f` JSON |
-| subfinder | subdomains | yes (passive) | JSON lines (`-oJ`) |
-| dnsx | DNS records | yes (passive) | JSON lines (`-json`) |
-| httpx | web services, technologies | yes (low-touch) | JSON lines (`-json`) |
-| amass | subdomains | import only | v3 `enum -json` |
-| anything else | | | a plain text list of hosts, one per line |
-
-Force a format with `rp import file --format <tool>` if detection guesses wrong. To add a tool, write a
-small adapter class; see [docs/USAGE.md](docs/USAGE.md#13-add-your-own-tool).
-
-## Choosing an AI model
-
-A model is written as `provider:model`. Check what is ready with `rp models`.
-
-| Spec | Runs | Setup |
+| Tool | What it finds | Input |
 | --- | --- | --- |
-| `ollama:qwen2.5:14b` | local | `ollama serve` and `ollama pull qwen2.5:14b` |
-| `lmstudio:<model>` | local | Start the LM Studio server (port 1234) |
-| `llamacpp:<model>` | local | `llama-server` on port 8080 |
-| `anthropic:claude-opus-5-5` | cloud | `pip install anthropic`, set `ANTHROPIC_API_KEY` |
-| `openai:<model>` | cloud | Set `OPENAI_API_KEY` |
-| `gemini:<model>` | cloud | Set `GEMINI_API_KEY` |
-| `openrouter:<model>` | cloud | Set `OPENROUTER_API_KEY` |
-| `codex-cli:default` | cloud, via CLI | `codex` installed and logged in |
-| `claude-cli:default` | cloud, via CLI | `claude` installed and logged in |
+| [Sherlock](https://github.com/sherlock-project/sherlock) | Accounts using a username on 400+ sites | username |
+| [Maigret](https://github.com/soxoj/maigret) | Accounts plus profile details (names, links, emails) | username |
+| [holehe](https://github.com/megadose/holehe) | Websites where an email is registered | email |
+| [theHarvester](https://github.com/laramies/theHarvester) | Emails, hosts and IPs from public sources | domain |
+| [subfinder](https://github.com/projectdiscovery/subfinder) | Subdomains | domain |
+| [dnsx](https://github.com/projectdiscovery/dnsx) | DNS records (A, AAAA, CNAME) | host |
+| [httpx](https://github.com/projectdiscovery/httpx) | Live websites, page titles, technologies | host or URL |
+| [amass](https://github.com/owasp-amass/amass) | Subdomains (file import only) | file |
 
-**Projects block cloud models by default.** Turn them on only if the client allows their data to leave
-your machine: `rp cloud on`.
+Any plain list of hosts can also be imported. New tools can be added with a small Python class; see the
+[usage guide](docs/USAGE.md#13-add-your-own-tool).
 
-Use a model once with `-m`, or set defaults in `reconpilot.yaml`
-(copy `reconpilot.example.yaml`):
+---
+
+## Installation
+
+**Requirements:** Python 3.11 or newer, on Linux or macOS.
+
+```bash
+git clone https://github.com/Abdelkoddous0/reconpilot.git
+cd reconpilot
+python -m venv .venv && source .venv/bin/activate
+pip install -e .
+```
+
+Then install the tools you want to use. You don't need all of them.
+
+```bash
+pipx install sherlock-project
+pipx install maigret
+pipx install holehe==1.61
+pipx install git+https://github.com/laramies/theHarvester@4.11.1
+go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest
+go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
+```
+
+For the AI analyst, install a local model (recommended, nothing leaves your machine):
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull qwen2.5:14b
+```
+
+Finally, check that everything is ready:
+
+```bash
+rp doctor
+```
+
+`rp doctor` lists each tool and AI backend as ready or not, with the command to fix anything missing.
+
+---
+
+## Quick start
+
+Try it with the sample data in this repository, no tools needed:
+
+```bash
+rp new lab --client "Example Corp" --auth-ref "RoE-2026-001" \
+   --scope example.com --seed username:jdoe_test
+
+rp import examples/subfinder.json examples/httpx.json tests/fixtures/sherlock/jdoe_test.csv
+
+rp status                 # dashboard
+rp search -t account      # accounts found for jdoe_test
+rp search admin           # anything containing "admin"
+rp show N3                # one item, what it is linked to, and its evidence
+rp report --format html   # writes lab-report.html
+```
+
+Or run `rp` on its own for an interactive menu you can use with the arrow keys.
+
+---
+
+## Example workflows
+
+### Investigate a username
+
+```bash
+rp new case42 --client "Internal" --auth-ref "Case 42 consent form" --seed username:jdoe
+rp run username-sweep jdoe        # Sherlock + Maigret + holehe on found emails + AI summary
+rp search -t account              # accounts found
+rp search --out                   # leads found outside your scope (other usernames, emails)
+rp triage --identity              # AI review of the person's footprint
+rp report --format html
+```
+
+### Map a company's external footprint
+
+```bash
+rp new acme --client "Acme Corp" --auth-ref "RoE-2026-07" \
+   --scope acme.com --scope 203.0.113.0/24 --exclude vpn.acme.com
+rp run domain-surface acme.com    # subfinder + theHarvester + dnsx + httpx + AI triage
+rp findings                       # draft findings from the AI
+rp accept F1 F3                   # keep the real ones
+rp report --format html
+```
+
+### Run a single tool
+
+```bash
+rp run sherlock jdoe
+rp run holehe jane@example.com
+rp run theharvester acme.com
+```
+
+### Import results you already have
+
+```bash
+rp import sherlock/jdoe.csv results/subfinder.json   # the tool is detected automatically
+```
+
+Importing the same file twice does not create duplicates.
+
+---
+
+## The AI analyst
+
+```bash
+rp triage                                    # review everything, draft findings, suggest next steps
+rp ask "which usernames appear on more than three sites?"
+rp chat                                      # back-and-forth conversation
+```
+
+Example answer:
+
+```text
+rp_selftest_alpha77 has 6 accounts:
+
+ Platform    Account URL                                      Evidence
+ f3.cool     https://f3.cool/rp_selftest_alpha77/             [E26096]
+ YouTube     https://www.youtube.com/@rp_selftest_alpha77     [E26097]
+ ...
+
+These may be false positives: a second made-up username got hits on the same sites.
+
+✔ citations verified  claude-cli:default · 4 steps · 3 tool calls · 13 cited claims
+```
+
+How it stays trustworthy:
+
+- **Read-only.** The AI never runs tools. It can only *suggest* a step, which you approve with
+  `rp approve J4` and then run with `rp run J4`.
+- **Evidence required.** Every claim must cite a real record. If it doesn't, the answer is sent back to
+  the model. If it still fails, the answer is clearly marked **unverified**.
+- **Scope-aware.** It cannot suggest anything outside your scope.
+- **Resistant to prompt injection.** Collected text (web pages, profiles) is treated as data, so
+  instructions hidden inside it are ignored.
+
+### Supported models
+
+| Model | Where it runs | Setup |
+| --- | --- | --- |
+| `ollama:qwen2.5:14b` (default) | your machine | `ollama pull qwen2.5:14b` |
+| `lmstudio:<model>`, `llamacpp:<model>` | your machine | start the local server |
+| `anthropic:claude-opus-5-5` | cloud | `pip install -e '.[anthropic]'`, set `ANTHROPIC_API_KEY` |
+| `openai:<model>`, `gemini:<model>`, `openrouter:<model>` | cloud | set the matching API key |
+| `claude-cli:default`, `codex-cli:default` | cloud | uses your Claude Code or Codex subscription |
+
+Pick a model per command with `-m`, or set defaults in `reconpilot.yaml`. Cloud models are blocked for
+each project until you run `rp cloud on`. For a local model, use 14B parameters or more for reliable
+results.
+
+---
+
+## Safety and scope
+
+ReconPilot is built for **authorized** work: penetration tests, bug bounty programs, internal
+investigations, and research with consent.
+
+- **Authorization is required.** Every project needs an authorization reference (contract, rules of
+  engagement, bug bounty URL or consent form).
+- **Scope is checked before every run.** Targets must be inside your scope: listed domains and IP ranges,
+  or people you added with `rp seed`. Anything else is refused.
+- **Dates are enforced.** With `--start` and `--end`, nothing runs or imports outside the engagement window.
+- **Tools are graded by impact.** *Passive* tools only query public sources. *Low-touch* tools (httpx,
+  holehe) send light requests and can be turned off with `rp policy low-touch off`. *Active* tools are
+  blocked unless you allow them.
+- **Leads stay out until you add them.** If Maigret finds a second username or a personal email, it is
+  stored as out of scope. Playbooks and the AI ignore it until you add it with `rp seed`.
+- **Everything is logged.** `rp log` shows every import, tool run and AI action.
+
+---
+
+## Command reference
+
+| Command | What it does |
+| --- | --- |
+| `rp` | Interactive menu |
+| `rp doctor` | Check Python, tools and AI models |
+| `rp new <name>` | Create a project (asks for missing details) |
+| `rp use <name>` / `rp ls` | Switch project / list projects |
+| `rp status` | Dashboard |
+| `rp scope [add\|remove\|window]` | View or change the scope |
+| `rp seed <type> <value>` | Add a person to investigate (`username`, `email`, `phone`, `person`) |
+| `rp tools` / `rp playbooks` | Available tools / ready-made chains of tools |
+| `rp run <tool or playbook> <target>` | Run a tool or playbook |
+| `rp run J<id>` | Run a step the AI suggested, after you approve it |
+| `rp import <files>` | Load output files from any supported tool |
+| `rp search [text] [-t type]` | Search everything collected |
+| `rp show <N\|E\|F id>` | Details of an item, a piece of evidence or a finding |
+| `rp triage` / `rp ask` / `rp chat` | Use the AI analyst |
+| `rp findings`, `rp accept`, `rp reject` | Review findings |
+| `rp steps`, `rp approve`, `rp deny` | Review suggested next steps |
+| `rp report [--format html]` | Write a report |
+| `rp export --format json\|csv\|graphml` | Export data for spreadsheets, scripts, Gephi or Maltego |
+| `rp policy`, `rp cloud` | Allow or block tool types and cloud AI |
+| `rp log` | Audit log |
+
+Add `--json` to `status`, `search`, `show`, `findings`, `steps`, `tools` or `scope show` for
+machine-readable output. Run `rp <command> --help` for every option.
+
+**Full documentation:** [docs/USAGE.md](docs/USAGE.md) covers each step in detail, writing your own
+playbooks, adding new tools and troubleshooting.
+
+---
+
+## Configuration
+
+Settings are optional. Copy the example file and edit it:
+
+```bash
+cp reconpilot.example.yaml reconpilot.yaml
+```
 
 ```yaml
+data_dir: ./data                     # where projects are stored (one SQLite file each)
+
 models:
   default: ollama:qwen2.5:14b
   profiles:
-    triage: ollama:qwen2.5:14b         # rp triage
-    analyst: anthropic:claude-opus-5-5 # rp ask / rp chat
+    triage: ollama:qwen2.5:14b       # model for rp triage
+    analyst: claude-cli:default      # model for rp ask / rp chat
+
+tools:
+  theharvester:
+    sources: crtsh,certspotter,hackertarget,otx,rapiddns,urlscan   # sources that need no API key
 ```
 
-Tip: local models under ~14B parameters struggle with multi-step tool use. Use 14B+ for the analyst.
+ReconPilot looks for `reconpilot.yaml` in the current folder, then in `~/.config/reconpilot/config.yaml`.
 
-## How the AI analyst works
+---
 
-1. It gets read-only tools: search assets, inspect an asset and its relationships, read evidence.
-2. Collected text is wrapped as untrusted data, so instructions planted in a web page title or DNS record
-   are not followed.
-3. It can draft findings and suggest steps, but only with evidence IDs and only for in-scope targets.
-4. Its final answer goes through a citation check. Missing or invented evidence IDs are sent back to the
-   model to fix; answers that still fail are marked **unverified**.
-
-## Project layout
+## Project structure
 
 ```text
 reconpilot/
-  cli.py           commands            shell.py       interactive menu
-  ui.py            terminal output     importers.py   file import via adapters
-  scope.py         scope + subjects    store.py       SQLite evidence store, graph, migrations
-  report.py        Markdown / HTML     export.py      JSON / CSV / GraphML
-  playbook.py      playbook engine     playbooks/     built-in playbooks (YAML)
-  tools/base.py    adapter interface   tools/runner.py  scope-gated tool execution
-  tools/infra.py   subfinder, dnsx, httpx, amass, host lists
-  tools/identity.py sherlock, maigret, holehe, theHarvester
-  ai/providers.py  model backends      ai/analyst.py  agent loop and citation check
-tests/             pytest suite        tests/fixtures/  real-format tool output samples
-docs/USAGE.md      full usage guide    examples/      fictional sample data
+├── cli.py              commands
+├── shell.py            interactive menu
+├── scope.py            scope rules (domains, networks, people)
+├── store.py            local database: evidence, entities, links, findings, audit log
+├── importers.py        reading tool output files
+├── playbook.py         chains of tools
+├── playbooks/          built-in playbooks (YAML)
+├── report.py           Markdown and HTML reports
+├── export.py           JSON, CSV and GraphML export
+├── tools/
+│   ├── base.py         how a tool is described (adapter interface)
+│   ├── runner.py       runs tools safely after the scope checks
+│   ├── identity.py     Sherlock, Maigret, holehe, theHarvester
+│   └── infra.py        subfinder, dnsx, httpx, amass, host lists
+└── ai/
+    ├── analyst.py      the AI analyst and its evidence check
+    └── providers.py    connections to local and cloud models
+docs/USAGE.md           full usage guide
+tests/                  test suite, with real output samples from each tool
+examples/               sample data
 ```
+
+---
 
 ## Development
 
 ```bash
-uv pip install -e '.[dev]'
-ruff check reconpilot tests
-mypy reconpilot
-pytest
+pip install -e '.[dev]'
+pytest                      # tests
+ruff check reconpilot tests # lint
+mypy reconpilot             # type check
 ```
 
-## Roadmap
+All three run on every push via GitHub Actions.
 
-- [x] Scope engine, evidence store, importers, AI analyst, CLI and interactive menu
-- [x] Tool adapters and scope-gated runner (`rp run`), `rp tools`, `rp doctor`, plugin entry point
-- [x] Identity OSINT: subjects in scope, Sherlock, Maigret, holehe, theHarvester, playbooks
-- [x] Evidence dedupe, schema migrations, scope editing with re-flagging, engagement window enforced
-- [x] `--json` output, JSON / CSV / GraphML export, HTML report, CI (ruff, mypy, pytest)
-- [ ] More adapters: Blackbird, PhoneInfoga, h8mail, exiftool, gau
-- [ ] PyPI release and a Docker image with the tools preinstalled
-- [ ] `rp diff` (what is new since the last run), `rp setup` wizard, shell completion
-- [ ] Local web UI with an interactive graph view
-- [ ] Evaluation set to compare models on real engagements
+To add support for a new tool, write an adapter class (usually under 60 lines), add a real output sample
+under `tests/fixtures/<tool>/`, and add a test. The [usage guide](docs/USAGE.md#13-add-your-own-tool)
+walks through an example.
+
+---
 
 ## Legal
 
-Use ReconPilot only on assets you own or are explicitly authorized to assess. You are responsible for
-complying with the law, your rules of engagement and each data source's terms of service.
+Use ReconPilot only on targets you own or are explicitly authorized to investigate. You are responsible
+for complying with the law, your rules of engagement, data-protection rules that apply to personal data,
+and the terms of service of every source and tool used.
