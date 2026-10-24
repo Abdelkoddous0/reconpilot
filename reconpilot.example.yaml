@@ -1,0 +1,23 @@
+# Copy to reconpilot.yaml (or ~/.config/reconpilot/config.yaml) and edit.
+data_dir: ./data
+
+models:
+  # Spec format: "<provider>:<model>"
+  default: ollama:qwen2.5:14b
+  profiles:
+    triage: ollama:qwen2.5:14b            # used by `reconpilot triage`
+    analyst: ollama:qwen2.5:14b           # used by `reconpilot ask`
+    # analyst: anthropic:claude-opus-5-5  # needs allow_cloud=true on the project
+    # analyst: codex-cli:default          # uses your Codex subscription
+    # analyst: claude-cli:default         # uses your Claude Code subscription
+  providers:
+    # Add your own OpenAI-compatible server, e.g. vLLM on another port:
+    vllm:
+      type: openai_compat
+      base_url: http://127.0.0.1:8000/v1
+      local: true
+
+analyst:
+  max_steps: 12
+  max_citation_retries: 2
+  evidence_char_limit: 4000
